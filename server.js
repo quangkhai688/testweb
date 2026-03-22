@@ -21,23 +21,17 @@ const allowedOrigins = (process.env.CORS_ORIGINS || '')
   .map(o => o.trim())
   .filter(Boolean);
 
-// Thêm mặc định cho dev
 allowedOrigins.push('http://localhost:3000', 'http://localhost:5500', 'http://127.0.0.1:5500');
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Cho phép request không có origin (Postman, mobile app, curl)
     if (!origin) return callback(null, true);
-
-    // Cho phép tất cả subdomain của netlify
     if (origin.endsWith('.netlify.app') || origin.endsWith('.netlify.com')) {
       return callback(null, true);
     }
-
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
-
     console.warn(`🚫 CORS blocked: ${origin}`);
     callback(new Error('Not allowed by CORS'));
   },
@@ -50,7 +44,6 @@ app.use(cors({
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Request logger (dev mode)
 if (process.env.NODE_ENV !== 'production') {
   app.use((req, _res, next) => {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
@@ -65,13 +58,11 @@ app.use('/api/v1/orders', orderRoutes);
 app.use('/api/v1/wallet', walletRoutes);
 app.use('/api/v1/admin',  adminRoutes);
 
-// Root
 app.get('/', (_req, res) => {
   res.json({
     name:    'Mod Zone API',
     version: '1.0.0',
     status:  'running',
-    docs:    'See README.md for API documentation',
   });
 });
 
@@ -89,34 +80,33 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ success: false, message: 'Lỗi server nội bộ' });
 });
 
-// ─── Khởi động server ─────────────────────────────────────────────────────────
-const startServer = async () => {
-  // Test DB connection
-  try {
-    await db.query('SELECT NOW()');
-    console.log('✅ Database connection OK');
-  } catch (err) {
-    console.error('❌ Cannot connect to database:', err.message);
-    console.error('   Kiểm tra lại DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD trong .env');
-    process.exit(1);
-  }
-
-  // Tạo tài khoản admin mặc định nếu chưa có
-  await createDefaultAdmin();
-
-  app.listen(PORT, () => {
-    console.log(`\n🚀 Mod Zone API running on port ${PORT}`);
-    console.log(`   http://localhost:${PORT}`);
-    console.log(`   Health: http://localhost:${PORT}/api/v1/auth/health\n`);
-  });
+// ─── Tạo bảng nếu chưa có ────────────────────────────────────────────────────
+const runMigrations = async () => {
+  await db.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto";`);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      username        VARCHAR(50) UNIQUE NOT NULL,
+      email           VARCHAR(255) UNIQUE NOT NULL,
+      password_hash   VARCHAR(255) NOT NULL,
+      role            VARCHAR(20) DEFAULT 'user',
+      balance         DECIMAL(10,2) DEFAULT 0,
+      ref_code        VARCHAR(10) UNIQUE,
+      referred_by_id  UUID REFERENCES users(id) ON DELETE SET NULL,
+      is_locked       BOOLEAN DEFAULT false,
+      created_at      TIMESTAMP DEFAULT NOW(),
+      updated_at      TIMESTAMP DEFAULT NOW()
+    );
+  `);
+  console.log('✅ Tables ready');
 };
 
 // ─── Tạo admin mặc định ───────────────────────────────────────────────────────
 const createDefaultAdmin = async () => {
   try {
-    const adminUser   = process.env.ADMIN_USERNAME || 'admin';
-    const adminEmail  = process.env.ADMIN_EMAIL    || 'admin@modzone.vn';
-    const adminPass   = process.env.ADMIN_PASSWORD || 'Admin@123456';
+    const adminUser  = process.env.ADMIN_USERNAME || 'admin';
+    const adminEmail = process.env.ADMIN_EMAIL    || 'admin@modzone.vn';
+    const adminPass  = process.env.ADMIN_PASSWORD || 'Admin@123456';
 
     const existing = await db.query(
       'SELECT id FROM users WHERE username = $1',
@@ -126,14 +116,13 @@ const createDefaultAdmin = async () => {
     if (existing.rows.length === 0) {
       const hash    = await bcrypt.hash(adminPass, 12);
       const refCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-
       await db.query(
         `INSERT INTO users (username, email, password_hash, role, ref_code)
          VALUES ($1, $2, $3, 'admin', $4)`,
         [adminUser, adminEmail, hash, refCode]
       );
-      console.log(`✅ Admin account created: ${adminUser} / ${adminPass}`);
-      console.log('   ⚠️  Hãy đổi mật khẩu admin ngay sau khi đăng nhập lần đầu!');
+      console.log(`✅ Admin account created: ${adminUser}`);
+      console.log('   ⚠️  Hãy đổi mật khẩu admin sau khi đăng nhập lần đầu!');
     } else {
       console.log(`✅ Admin account exists: ${adminUser}`);
     }
@@ -142,15 +131,40 @@ const createDefaultAdmin = async () => {
   }
 };
 
-// Graceful shutdown
+// ─── Khởi động server ─────────────────────────────────────────────────────────
+const startServer = async () => {
+  try {
+    await db.query('SELECT NOW()');
+    console.log('✅ Database connection OK');
+  } catch (err) {
+    console.error('❌ Cannot connect to database:', err.message);
+    process.exit(1);
+  }
+
+  try {
+    await runMigrations();
+  } catch (err) {
+    console.error('❌ Migration failed:', err.message);
+    process.exit(1);
+  }
+
+  await createDefaultAdmin();
+
+  app.listen(PORT, () => {
+    console.log(`\n🚀 Mod Zone API running on port ${PORT}`);
+    console.log(`   Health: http://localhost:${PORT}/api/v1/auth/health\n`);
+  });
+};
+
+// ─── Graceful shutdown ────────────────────────────────────────────────────────
 process.on('SIGTERM', async () => {
-  console.log('\n🛑 SIGTERM received. Shutting down gracefully...');
+  console.log('\n🛑 Shutting down gracefully...');
   await db.pool.end();
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
-  console.log('\n🛑 SIGINT received. Shutting down gracefully...');
+  console.log('\n🛑 Shutting down gracefully...');
   await db.pool.end();
   process.exit(0);
 });
