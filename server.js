@@ -74,11 +74,10 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ success: false, message: 'Lỗi server nội bộ' });
 });
 
-// ─── Migration: tạo tất cả bảng ──────────────────────────────────────────────
+// ─── Migration ────────────────────────────────────────────────────────────────
 const runMigrations = async () => {
   await db.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto";`);
 
-  // Users
   await db.query(`
     CREATE TABLE IF NOT EXISTS users (
       id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -95,7 +94,6 @@ const runMigrations = async () => {
     );
   `);
 
-  // Games
   await db.query(`
     CREATE TABLE IF NOT EXISTS games (
       id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -108,7 +106,6 @@ const runMigrations = async () => {
     );
   `);
 
-  // Tiers
   await db.query(`
     CREATE TABLE IF NOT EXISTS tiers (
       id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -121,7 +118,6 @@ const runMigrations = async () => {
     );
   `);
 
-  // Game keys
   await db.query(`
     CREATE TABLE IF NOT EXISTS game_keys (
       id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -136,7 +132,6 @@ const runMigrations = async () => {
     );
   `);
 
-  // Coupons
   await db.query(`
     CREATE TABLE IF NOT EXISTS coupons (
       id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -151,7 +146,6 @@ const runMigrations = async () => {
     );
   `);
 
-  // Orders
   await db.query(`
     CREATE TABLE IF NOT EXISTS orders (
       id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -167,7 +161,6 @@ const runMigrations = async () => {
     );
   `);
 
-  // Affiliate commissions
   await db.query(`
     CREATE TABLE IF NOT EXISTS affiliate_commissions (
       id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -183,7 +176,6 @@ const runMigrations = async () => {
     );
   `);
 
-  // Deposits
   await db.query(`
     CREATE TABLE IF NOT EXISTS deposits (
       id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -198,7 +190,6 @@ const runMigrations = async () => {
     );
   `);
 
-  // Affiliate withdrawals
   await db.query(`
     CREATE TABLE IF NOT EXISTS affiliate_withdrawals (
       id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -212,7 +203,6 @@ const runMigrations = async () => {
     );
   `);
 
-  // Wallet transactions
   await db.query(`
     CREATE TABLE IF NOT EXISTS wallet_transactions (
       id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -228,6 +218,44 @@ const runMigrations = async () => {
   console.log('✅ Tables ready');
 };
 
+// ─── Seed data mẫu ───────────────────────────────────────────────────────────
+const seedData = async () => {
+  try {
+    const existing = await db.query(`SELECT id FROM games WHERE slug = 'play-together'`);
+    if (existing.rows.length > 0) {
+      console.log('✅ Seed data đã tồn tại, bỏ qua');
+      return;
+    }
+
+    const gameResult = await db.query(`
+      INSERT INTO games (name, slug, description, is_active)
+      VALUES ('Play Together', 'play-together', 'Game Play Together', true)
+      RETURNING id, name
+    `);
+    const game = gameResult.rows[0];
+    console.log('✅ Game:', game.name, game.id);
+
+    const tiers = [
+      { name: '1 ngày',  price: 10000,  dur_days: 1  },
+      { name: '7 ngày',  price: 50000,  dur_days: 7  },
+      { name: '30 ngày', price: 150000, dur_days: 30 },
+    ];
+
+    for (const tier of tiers) {
+      const t = await db.query(`
+        INSERT INTO tiers (game_id, name, price, dur_days, is_active)
+        VALUES ($1, $2, $3, $4, true)
+        RETURNING id, name, price
+      `, [game.id, tier.name, tier.price, tier.dur_days]);
+      console.log(`✅ Tier: ${t.rows[0].name} | ID: ${t.rows[0].id}`);
+    }
+
+    console.log('✅ Seed data hoàn tất!');
+  } catch (err) {
+    console.error('❌ Seed error:', err.message);
+  }
+};
+
 // ─── Tạo admin mặc định ───────────────────────────────────────────────────────
 const createDefaultAdmin = async () => {
   try {
@@ -236,8 +264,7 @@ const createDefaultAdmin = async () => {
     const adminPass  = process.env.ADMIN_PASSWORD || 'Admin@123456';
 
     const existing = await db.query(
-      'SELECT id FROM users WHERE username = $1',
-      [adminUser]
+      'SELECT id FROM users WHERE username = $1', [adminUser]
     );
 
     if (existing.rows.length === 0) {
@@ -275,6 +302,7 @@ const startServer = async () => {
   }
 
   await createDefaultAdmin();
+  await seedData();
 
   app.listen(PORT, () => {
     console.log(`\n🚀 Mod Zone API running on port ${PORT}`);
@@ -284,15 +312,4 @@ const startServer = async () => {
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
 process.on('SIGTERM', async () => {
-  console.log('\n🛑 Shutting down gracefully...');
-  await db.pool.end();
-  process.exit(0);
-});
-
-process.on('SIGINT', async () => {
-  console.log('\n🛑 Shutting down gracefully...');
-  await db.pool.end();
-  process.exit(0);
-});
-
-startServer();
+  console
