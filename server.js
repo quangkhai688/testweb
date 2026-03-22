@@ -29,9 +29,7 @@ app.use(cors({
     if (origin.endsWith('.netlify.app') || origin.endsWith('.netlify.com')) {
       return callback(null, true);
     }
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
+    if (allowedOrigins.includes(origin)) return callback(null, true);
     console.warn(`🚫 CORS blocked: ${origin}`);
     callback(new Error('Not allowed by CORS'));
   },
@@ -62,7 +60,7 @@ app.get('/', (_req, res) => {
   res.json({ name: 'Mod Zone API', version: '1.0.0', status: 'running' });
 });
 
-// ─── 404 handler ─────────────────────────────────────────────────────────────
+// ─── 404 ─────────────────────────────────────────────────────────────────────
 app.use((_req, res) => {
   res.status(404).json({ success: false, message: 'Endpoint không tồn tại' });
 });
@@ -76,10 +74,11 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ success: false, message: 'Lỗi server nội bộ' });
 });
 
-// ─── Tạo bảng nếu chưa có ────────────────────────────────────────────────────
+// ─── Migration: tạo tất cả bảng ──────────────────────────────────────────────
 const runMigrations = async () => {
   await db.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto";`);
 
+  // Users
   await db.query(`
     CREATE TABLE IF NOT EXISTS users (
       id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -94,7 +93,10 @@ const runMigrations = async () => {
       created_at      TIMESTAMP DEFAULT NOW(),
       updated_at      TIMESTAMP DEFAULT NOW()
     );
+  `);
 
+  // Games
+  await db.query(`
     CREATE TABLE IF NOT EXISTS games (
       id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name        VARCHAR(100) NOT NULL,
@@ -104,7 +106,10 @@ const runMigrations = async () => {
       is_active   BOOLEAN DEFAULT true,
       created_at  TIMESTAMP DEFAULT NOW()
     );
+  `);
 
+  // Tiers
+  await db.query(`
     CREATE TABLE IF NOT EXISTS tiers (
       id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       game_id     UUID REFERENCES games(id) ON DELETE CASCADE,
@@ -114,17 +119,25 @@ const runMigrations = async () => {
       is_active   BOOLEAN DEFAULT true,
       created_at  TIMESTAMP DEFAULT NOW()
     );
+  `);
 
+  // Game keys
+  await db.query(`
     CREATE TABLE IF NOT EXISTS game_keys (
       id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       tier_id     UUID REFERENCES tiers(id) ON DELETE CASCADE,
-      code        VARCHAR(255) NOT NULL,
+      game_id     UUID REFERENCES games(id) ON DELETE CASCADE,
+      code        VARCHAR(255) UNIQUE NOT NULL,
+      price       DECIMAL(10,2),
       status      VARCHAR(20) DEFAULT 'available',
       sold_to_id  UUID REFERENCES users(id) ON DELETE SET NULL,
       sold_at     TIMESTAMP,
       created_at  TIMESTAMP DEFAULT NOW()
     );
+  `);
 
+  // Coupons
+  await db.query(`
     CREATE TABLE IF NOT EXISTS coupons (
       id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       code          VARCHAR(50) UNIQUE NOT NULL,
@@ -136,7 +149,10 @@ const runMigrations = async () => {
       expires_at    TIMESTAMP,
       created_at    TIMESTAMP DEFAULT NOW()
     );
+  `);
 
+  // Orders
+  await db.query(`
     CREATE TABLE IF NOT EXISTS orders (
       id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       order_ref   VARCHAR(50) UNIQUE NOT NULL,
@@ -149,17 +165,55 @@ const runMigrations = async () => {
       status      VARCHAR(20) DEFAULT 'completed',
       created_at  TIMESTAMP DEFAULT NOW()
     );
+  `);
 
+  // Affiliate commissions
+  await db.query(`
     CREATE TABLE IF NOT EXISTS affiliate_commissions (
-      id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      referrer_id  UUID REFERENCES users(id) ON DELETE CASCADE,
-      referee_id   UUID REFERENCES users(id) ON DELETE CASCADE,
-      order_id     UUID REFERENCES orders(id) ON DELETE CASCADE,
-      amount       DECIMAL(10,2) NOT NULL,
-      rate_pct     DECIMAL(5,2) NOT NULL,
-      created_at   TIMESTAMP DEFAULT NOW()
+      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      referrer_id     UUID REFERENCES users(id) ON DELETE CASCADE,
+      referee_id      UUID REFERENCES users(id) ON DELETE CASCADE,
+      order_id        UUID REFERENCES orders(id) ON DELETE CASCADE,
+      amount          DECIMAL(10,2) NOT NULL,
+      rate_pct        DECIMAL(5,2) NOT NULL,
+      status          VARCHAR(20) DEFAULT 'pending',
+      reviewed_by_id  UUID REFERENCES users(id) ON DELETE SET NULL,
+      reviewed_at     TIMESTAMP,
+      created_at      TIMESTAMP DEFAULT NOW()
     );
+  `);
 
+  // Deposits
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS deposits (
+      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id         UUID REFERENCES users(id) ON DELETE CASCADE,
+      amount          DECIMAL(10,2) NOT NULL,
+      method          VARCHAR(50) NOT NULL,
+      note            TEXT,
+      status          VARCHAR(20) DEFAULT 'pending',
+      reviewed_by_id  UUID REFERENCES users(id) ON DELETE SET NULL,
+      reviewed_at     TIMESTAMP,
+      created_at      TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  // Affiliate withdrawals
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS affiliate_withdrawals (
+      id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id         UUID REFERENCES users(id) ON DELETE CASCADE,
+      amount          DECIMAL(10,2) NOT NULL,
+      bank_info       TEXT,
+      status          VARCHAR(20) DEFAULT 'pending',
+      reviewed_by_id  UUID REFERENCES users(id) ON DELETE SET NULL,
+      reviewed_at     TIMESTAMP,
+      created_at      TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  // Wallet transactions
+  await db.query(`
     CREATE TABLE IF NOT EXISTS wallet_transactions (
       id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id       UUID REFERENCES users(id) ON DELETE CASCADE,
