@@ -3,7 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
 const bcrypt  = require('bcryptjs');
-const db      = require('./db');
+const db      = require('./src/config/db');
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 const authRoutes   = require('./routes/auth');
@@ -59,11 +59,7 @@ app.use('/api/v1/wallet', walletRoutes);
 app.use('/api/v1/admin',  adminRoutes);
 
 app.get('/', (_req, res) => {
-  res.json({
-    name:    'Mod Zone API',
-    version: '1.0.0',
-    status:  'running',
-  });
+  res.json({ name: 'Mod Zone API', version: '1.0.0', status: 'running' });
 });
 
 // ─── 404 handler ─────────────────────────────────────────────────────────────
@@ -83,6 +79,7 @@ app.use((err, _req, res, _next) => {
 // ─── Tạo bảng nếu chưa có ────────────────────────────────────────────────────
 const runMigrations = async () => {
   await db.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto";`);
+
   await db.query(`
     CREATE TABLE IF NOT EXISTS users (
       id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -97,7 +94,83 @@ const runMigrations = async () => {
       created_at      TIMESTAMP DEFAULT NOW(),
       updated_at      TIMESTAMP DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS games (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name        VARCHAR(100) NOT NULL,
+      slug        VARCHAR(100) UNIQUE NOT NULL,
+      description TEXT,
+      image_url   VARCHAR(500),
+      is_active   BOOLEAN DEFAULT true,
+      created_at  TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS tiers (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      game_id     UUID REFERENCES games(id) ON DELETE CASCADE,
+      name        VARCHAR(100) NOT NULL,
+      price       DECIMAL(10,2) NOT NULL,
+      dur_days    INT NOT NULL,
+      is_active   BOOLEAN DEFAULT true,
+      created_at  TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS game_keys (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tier_id     UUID REFERENCES tiers(id) ON DELETE CASCADE,
+      code        VARCHAR(255) NOT NULL,
+      status      VARCHAR(20) DEFAULT 'available',
+      sold_to_id  UUID REFERENCES users(id) ON DELETE SET NULL,
+      sold_at     TIMESTAMP,
+      created_at  TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS coupons (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      code          VARCHAR(50) UNIQUE NOT NULL,
+      discount_pct  DECIMAL(5,2) DEFAULT 0,
+      discount_flat DECIMAL(10,2) DEFAULT 0,
+      max_uses      INT DEFAULT 1,
+      used_count    INT DEFAULT 0,
+      is_active     BOOLEAN DEFAULT true,
+      expires_at    TIMESTAMP,
+      created_at    TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS orders (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      order_ref   VARCHAR(50) UNIQUE NOT NULL,
+      user_id     UUID REFERENCES users(id) ON DELETE SET NULL,
+      key_id      UUID REFERENCES game_keys(id) ON DELETE SET NULL,
+      tier_id     UUID REFERENCES tiers(id) ON DELETE SET NULL,
+      game_id     UUID REFERENCES games(id) ON DELETE SET NULL,
+      amount_paid DECIMAL(10,2) NOT NULL,
+      coupon_id   UUID REFERENCES coupons(id) ON DELETE SET NULL,
+      status      VARCHAR(20) DEFAULT 'completed',
+      created_at  TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS affiliate_commissions (
+      id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      referrer_id  UUID REFERENCES users(id) ON DELETE CASCADE,
+      referee_id   UUID REFERENCES users(id) ON DELETE CASCADE,
+      order_id     UUID REFERENCES orders(id) ON DELETE CASCADE,
+      amount       DECIMAL(10,2) NOT NULL,
+      rate_pct     DECIMAL(5,2) NOT NULL,
+      created_at   TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS wallet_transactions (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id       UUID REFERENCES users(id) ON DELETE CASCADE,
+      type          VARCHAR(20) NOT NULL,
+      amount        DECIMAL(10,2) NOT NULL,
+      balance_after DECIMAL(10,2) NOT NULL,
+      note          TEXT,
+      created_at    TIMESTAMP DEFAULT NOW()
+    );
   `);
+
   console.log('✅ Tables ready');
 };
 
@@ -122,7 +195,6 @@ const createDefaultAdmin = async () => {
         [adminUser, adminEmail, hash, refCode]
       );
       console.log(`✅ Admin account created: ${adminUser}`);
-      console.log('   ⚠️  Hãy đổi mật khẩu admin sau khi đăng nhập lần đầu!');
     } else {
       console.log(`✅ Admin account exists: ${adminUser}`);
     }
