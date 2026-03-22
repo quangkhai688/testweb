@@ -1,23 +1,40 @@
-{
-  "name": "modzone-backend",
-  "version": "1.0.0",
-  "description": "Backend API for Mod Zone game key store",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js",
-    "migrate": "node migrate.js"
-  },
-  "dependencies": {
-    "bcryptjs": "^2.4.3",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "jsonwebtoken": "^9.0.2",
-    "pg": "^8.12.0",
-    "uuid": "^10.0.0"
-  },
-  "devDependencies": {
-    "nodemon": "^3.1.4"
+'use strict';
+
+const { Pool } = require('pg');
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production'
+    ? { rejectUnauthorized: false }
+    : false,
+});
+
+async function query(sql, params = []) {
+  return pool.query(sql, params);
+}
+
+async function getClient() {
+  return pool.connect();
+}
+
+async function withTransaction(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
   }
 }
+
+async function ping() {
+  const result = await pool.query('SELECT NOW()');
+  return result.rows[0];
+}
+
+module.exports = { pool, query, getClient, withTransaction, ping };
